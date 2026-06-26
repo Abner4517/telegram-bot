@@ -22,7 +22,6 @@ for i in range(1, 6):
         API_KEYS.append(key)
 
 if not API_KEYS:
-    # اگه کلیدهای جدید نبود، از کلید اصلی استفاده کن
     main_key = os.environ.get("GEMINI_API_KEY")
     if main_key:
         API_KEYS.append(main_key)
@@ -35,8 +34,31 @@ if not TELEGRAM_TOKEN or not OWNER_ID:
     logger.error("❌ TELEGRAM_TOKEN یا OWNER_ID تنظیم نشده!")
     exit(1)
 
-# ========== مدل ==========
-MODEL_NAME = "gemini-1.5-flash"  # ✅ مدل مطمئن‌تر
+# ========== لیست مدل‌های موجود ==========
+# با توجه به ارور 404، این مدل‌ها رو امتحان کن
+MODELS_TO_TRY = [
+    "gemini-2.0-flash",        # ✅ جدید
+    "gemini-2.0-flash-lite",   # ✅ رایگان‌تر
+    "gemini-1.5-pro",          # ✅ قدیمی‌تر اما مطمئن
+]
+
+# پیدا کردن مدل موجود
+MODEL_NAME = None
+for model in MODELS_TO_TRY:
+    try:
+        # تست با یه کلید
+        genai.configure(api_key=API_KEYS[0])
+        test_model = genai.GenerativeModel(model)
+        test_response = test_model.generate_content("سلام")
+        MODEL_NAME = model
+        logger.info(f"✅ مدل {model} در دسترس است")
+        break
+    except Exception as e:
+        logger.warning(f"⚠️ مدل {model} در دسترس نیست: {e}")
+
+if not MODEL_NAME:
+    MODEL_NAME = "gemini-2.0-flash"  # پیش‌فرض
+    logger.warning(f"⚠️ هیچ مدلی پیدا نشد، استفاده از پیش‌فرض: {MODEL_NAME}")
 
 # ========== پرامپت ==========
 SYSTEM_PROMPT = """تو یک دستیار هوشمند هستی که قراره به جای صاحبش صحبت کنی.
@@ -49,11 +71,10 @@ SYSTEM_PROMPT = """تو یک دستیار هوشمند هستی که قراره 
 ۵. هرگز نگو "من یک ربات هستم"
 ۶. پاسخ‌هات کوتاه و مختصر باشه"""
 
-# ========== پیدا کردن کلید کاری (ساده‌شده) ==========
+# ========== پیدا کردن کلید ==========
 current_key_index = 0
 
 def get_next_key():
-    """گرفتن کلید بعدی به صورت چرخشی"""
     global current_key_index
     key = API_KEYS[current_key_index]
     current_key_index = (current_key_index + 1) % len(API_KEYS)
@@ -97,12 +118,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_name = user.first_name or "کاربر"
     
+    # ========== پیام خوش‌آمدگویی جدید ==========
     await update.message.reply_text(
-        f"👋 سلام {user_name}!\n\n"
-        f"من دستیار هوشمند هستم.\n"
-        f"هر سوالی داری، بپرس! 🤖\n\n"
+        f"👋 سلام {user_name}! من حسن کوچولو هستم! 😊\n\n"
+        f"هر سوالی داری، از من بپرس! 🤖\n"
+        f"سعی می‌کنم بهترین جواب رو بهت بدم.\n\n"
         f"📊 سهمیه روزانه: {DAILY_LIMIT} پیام\n"
-        f"🔑 تعداد کلیدها: {len(API_KEYS)}\n"
         f"🔧 مدل: {MODEL_NAME}"
     )
 
@@ -166,7 +187,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         
-        # ========== استفاده از کلید بعدی ==========
+        # ========== استفاده از کلید ==========
         key = get_next_key()
         genai.configure(api_key=key)
         
@@ -195,10 +216,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ سهمیه API تموم شده!\n"
                 f"لطفاً بعداً تلاش کن. ⏳"
             )
-        elif "invalid" in error_msg.lower() or "key" in error_msg.lower():
+        elif "404" in error_msg or "not found" in error_msg:
             await update.message.reply_text(
-                f"❌ کلید API نامعتبر!\n"
-                f"لطفاً کلیدها رو چک کن."
+                f"❌ مدل {MODEL_NAME} در دسترس نیست!\n"
+                f"لطفاً به صاحبم اطلاع بده. 🔧"
             )
         else:
             await update.message.reply_text(f"❌ خطا: {error_msg[:100]}")
