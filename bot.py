@@ -22,16 +22,50 @@ try:
     genai.configure(api_key=GEMINI_API_KEY)
     logger.info("✅ Gemini API تنظیم شد")
     
-    # لیست مدل‌های موجود
+    # گرفتن لیست مدل‌های موجود
+    available_models = []
     try:
-        models = genai.list_models()
-        for model in models:
-            logger.info(f"📌 مدل موجود: {model.name}")
-    except:
-        pass
+        for model in genai.list_models():
+            model_name = model.name.replace("models/", "")
+            available_models.append(model_name)
+            logger.info(f"📌 مدل موجود: {model_name}")
+    except Exception as e:
+        logger.warning(f"⚠️ نمی‌تونم لیست مدل‌ها رو بگیرم: {e}")
+    
+    # انتخاب مدل مناسب
+    MODEL_NAME = None
+    
+    # لیست مدل‌های احتمالی به ترتیب اولویت
+    possible_models = [
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+        "gemini-pro",
+        "gemini-1.0-pro",
+        "gemini-1.0-pro-vision"
+    ]
+    
+    # بررسی کدوم مدل موجوده
+    for model in possible_models:
+        try:
+            test = genai.GenerativeModel(model)
+            # تست با یه درخواست ساده
+            test.generate_content("سلام")
+            MODEL_NAME = model
+            logger.info(f"✅ مدل انتخاب شد: {MODEL_NAME}")
+            break
+        except Exception as e:
+            logger.warning(f"⚠️ مدل {model} در دسترس نیست: {e}")
+    
+    # اگر هیچ مدلی پیدا نشد، از اولین مدل موجود استفاده کن
+    if not MODEL_NAME and available_models:
+        MODEL_NAME = available_models[0]
+        logger.info(f"✅ استفاده از اولین مدل موجود: {MODEL_NAME}")
+    elif not MODEL_NAME:
+        MODEL_NAME = "gemini-1.5-pro"  # پیش‌فرض
+        logger.warning(f"⚠️ هیچ مدلی پیدا نشد، استفاده از پیش‌فرض: {MODEL_NAME}")
         
 except Exception as e:
-    logger.error(f"❌ خطا: {e}")
+    logger.error(f"❌ خطا در تنظیم Gemini: {e}")
     exit(1)
 
 # ========== بارگذاری فایل JSON ==========
@@ -126,9 +160,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         
-        # ✅ استفاده از مدل درست
+        # استفاده از مدل انتخاب شده
         model = genai.GenerativeModel(
-            model_name="gemini-pro",  # ✅ تغییر به gemini-pro
+            model_name=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT
         )
         
@@ -146,8 +180,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ خطا: {e}")
         error_msg = str(e)
-        if "404" in error_msg or "not found" in error_msg:
-            await update.message.reply_text("❌ مدل Gemini در دسترس نیست. لطفاً API Key رو چک کن.")
+        
+        # اگر خطای مدل بود، راه حل بده
+        if "not found" in error_msg or "404" in error_msg:
+            await update.message.reply_text(
+                f"❌ مدل {MODEL_NAME} در دسترس نیست.\n"
+                f"لطفاً با /status ببین کدوم مدل‌ها موجودن."
+            )
         else:
             await update.message.reply_text(f"❌ خطا: {error_msg[:100]}")
 
@@ -157,22 +196,37 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ دسترسی مجاز نیست.")
         return
     
-    # تست مدل
+    # تست مدل فعلی
     model_status = "❌"
     try:
-        test_model = genai.GenerativeModel("gemini-pro")
+        test_model = genai.GenerativeModel(MODEL_NAME)
         response = test_model.generate_content("سلام")
         if response.text:
             model_status = "✅"
     except Exception as e:
         model_status = f"❌ {str(e)[:30]}"
     
+    # گرفتن لیست مدل‌های موجود
+    models_list = []
+    try:
+        for model in genai.list_models():
+            name = model.name.replace("models/", "")
+            models_list.append(name)
+    except:
+        pass
+    
+    models_text = "\n".join([f"• {m}" for m in models_list[:5]]) if models_list else "❌ لیست در دسترس نیست"
+    
     status_text = f"""📊 **وضعیت ربات:**
 
 📁 **فایل JSON:** {'✅ موجود' if json_loaded else '❌ موجود نیست'}
 📝 **تعداد پیام‌ها:** {len(chat_context.split(chr(10))) if chat_context else 0}
-🤖 **Gemini API:** {'✅ متصل' if GEMINI_API_KEY else '❌'}
-🔧 **مدل:** gemini-pro {model_status}
+🤖 **Gemini API:** ✅ متصل
+🔧 **مدل فعلی:** {MODEL_NAME} {model_status}
+
+**مدل‌های موجود:**
+{models_text}
+
 📝 **طول پرامپت:** {len(SYSTEM_PROMPT)} کاراکتر
 
 💡 ربات با هر پیام شما بیشتر یاد می‌گیره!
@@ -197,7 +251,7 @@ def main():
     logger.info("🚀 ربات هوشمند روشن شد!")
     logger.info(f"📁 وضعیت JSON: {'✅' if json_loaded else '❌'}")
     logger.info(f"👤 کاربر مجاز: {AUTHORIZED_USER_ID}")
-    logger.info("🔧 مدل استفاده شده: gemini-pro")
+    logger.info(f"🔧 مدل استفاده شده: {MODEL_NAME}")
     
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
