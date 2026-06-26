@@ -1,20 +1,20 @@
+
 import os
 import json
 import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
-import anthropic
+import google.generativeai as genai
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(name)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 AUTHORIZED_USER_ID = int(os.environ.get("AUTHORIZED_USER_ID", "0"))
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
-# Load chat history from export file
 chat_context = ""
 export_path = "telegram_export.json"
 if os.path.exists(export_path):
@@ -22,7 +22,6 @@ if os.path.exists(export_path):
         data = json.load(f)
     
     messages_list = []
-    # Support both single chat and full export formats
     chats = data.get("chats", {}).get("list", [data]) if "chats" in data else [data]
     
     for chat in chats:
@@ -33,7 +32,6 @@ if os.path.exists(export_path):
                 if text:
                     messages_list.append(f"{sender}: {text}")
     
-    # Use last 300 messages for context (to stay within token limits)
     recent = messages_list[-300:]
     chat_context = "\n".join(recent)
     logger.info(f"Loaded {len(recent)} messages from export.")
@@ -69,7 +67,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # Security check
     if AUTHORIZED_USER_ID and user_id != AUTHORIZED_USER_ID:
         await update.message.reply_text("⛔ دسترسی مجاز نیست.")
         return
@@ -77,34 +74,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     chat_id = update.effective_chat.id
 
-    # Maintain per-chat conversation history
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
     
     conversation_history[chat_id].append({
         "role": "user",
-        "content": user_text
+        "parts": [user_text]
     })
 
-    # Keep only last 20 turns to avoid token overflow
     if len(conversation_history[chat_id]) > 40:
         conversation_history[chat_id] = conversation_history[chat_id][-40:]
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1000,
-            system=SYSTEM_PROMPT,
-            messages=conversation_history[chat_id]
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=SYSTEM_PROMPT
         )
         
-        reply = response.content[0].text
+        chat = model.start_chat(history=conversation_history[chat_id][:-1])
+        response = chat.send_message(user_text)
+        reply = response.text
         
         conversation_history[chat_id].append({
-            "role": "assistant",
-            "content": reply
+            "role": "model",
+            "parts": [reply]
         })
         
         await update.message.reply_text(reply)
@@ -129,5 +124,5 @@ def main():
     logger.info("Bot started...")
     app.run_polling()
 
-if __name__ == "__main__":
+if name == "main":
     main()
