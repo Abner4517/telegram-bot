@@ -7,7 +7,7 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes, Com
 import google.generativeai as genai
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
