@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler  # ✅ CommandHandler اضافه شد
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 import google.generativeai as genai
 
 # ========== تنظیمات ==========
@@ -17,9 +17,15 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     logger.error("❌ متغیرهای محیطی تنظیم نشده!")
     exit(1)
 
-genai.configure(api_key=GEMINI_API_KEY)
+# ========== تنظیم Gemini با خطایابی ==========
+try:
+    genai.configure(api_key=GEMINI_API_KEY)
+    logger.info("✅ Gemini تنظیم شد")
+except Exception as e:
+    logger.error(f"❌ خطا در تنظیم Gemini: {e}")
+    exit(1)
 
-# ========== بارگذاری فایل JSON (اگه باشه) ==========
+# ========== بارگذاری فایل JSON ==========
 chat_context = ""
 json_loaded = False
 export_path = "telegram_export.json"
@@ -31,7 +37,6 @@ if os.path.exists(export_path):
         
         messages_list = []
         
-        # استخراج پیام‌ها
         if "chats" in data:
             for chat in data["chats"].get("list", []):
                 for msg in chat.get("messages", []):
@@ -59,37 +64,32 @@ if os.path.exists(export_path):
 else:
     logger.warning("⚠️ فایل JSON پیدا نشد!")
 
-# ========== ساخت پرامپت هوشمند ==========
+# ========== ساخت پرامپت (کوتاه‌تر) ==========
 def build_prompt():
     if json_loaded and chat_context:
-        return f"""تو دقیقاً مثل صاحب این اکانت تلگرام جواب بده.
+        # اگر JSON خیلی طولانی باشه، کوتاه‌ش میکنیم
+        context_preview = chat_context[:2000] + "..." if len(chat_context) > 2000 else chat_context
+        
+        return f"""تو مثل این شخص صحبت کن.
 
-تاریخچه چت‌های اخیر این شخص (از فایل JSON):
-{chat_context}
+تاریخچه (خلاصه):
+{context_preview}
 
-قوانین مهم:
-۱. دقیقاً مثل این شخص صحبت کن (همون لحن، کلمات، و سبک)
-۲. از کلمات و اصطلاحات تکراری این شخص استفاده کن
-۳. مثل یک انسان معمولی جواب بده، نه ربات
-۴. فقط فارسی جواب بده
-۵. هیچوقت نگو "من یک ربات هستم"
-۶. اگه چیزی نمی‌دونی، بگو "نمیدونم"
+قوانین:
+۱. مثل این شخص صحبت کن
+۲. فارسی جواب بده
+۳. مثل انسان باش
 """
     else:
-        return """تو یک دستیار هوشمند هستی که قراره به جای صاحبش صحبت کنی.
-
-دستورالعمل‌ها:
-۱. مثل یک انسان معمولی و خودمانی صحبت کن
-۲. فقط به فارسی جواب بده
-۳. از کلمات محاوره‌ای و صمیمی استفاده کن
-۴. اگر چیزی نمی‌دونی، بگو "نمیدونم" یا "والا نمی‌دونم"
-۵. هرگز نگو "من یک ربات هستم" یا "به عنوان هوش مصنوعی"
-۶. پاسخ‌هات کوتاه و مختصر باشه (حداکثر ۲-۳ خط)
-۷. با اعتماد به نفس و طبیعی صحبت کن
-
-مهم: تو داری به جای یک شخص واقعی صحبت می‌کنی، پس کاملاً طبیعی و انسانی جواب بده."""
+        return """تو یک انسان معمولی هستی که به فارسی صحبت می‌کنی.
+قوانین:
+- مثل یک انسان معمولی و خودمانی صحبت کن
+- فقط فارسی جواب بده
+- کوتاه و مختصر جواب بده
+- هیچوقت نگو ربات هستم"""
 
 SYSTEM_PROMPT = build_prompt()
+logger.info(f"✅ پرامپت ساخته شد (طول: {len(SYSTEM_PROMPT)} کاراکتر)")
 
 # ========== تاریخچه مکالمه ==========
 conversation_history = {}
@@ -118,14 +118,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=SYSTEM_PROMPT
-        )
-        
-        chat = model.start_chat(history=conversation_history[chat_id][:-1])
-        response = chat.send_message(user_text)
-        reply = response.text
+        # تست اتصال به Gemini با یک پیام ساده
+        try:
+            model = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                system_instruction=SYSTEM_PROMPT
+            )
+            
+            chat = model.start_chat(history=conversation_history[chat_id][:-1])
+            response = chat.send_message(user_text)
+            reply = response.text
+            
+        except Exception as e:
+            logger.error(f"❌ خطای Gemini: {e}")
+            # اگر Gemini خطا داد، با یک پیام ساده تستش کن
+            try:
+                test_model = genai.GenerativeModel("gemini-1.5-flash")
+                test_response = test_model.generate_content("سلام")
+                logger.info(f"✅ Gemini با پیام ساده جواب داد: {test_response.text[:50]}")
+            except Exception as e2:
+                logger.error(f"❌ حتی پیام ساده هم خطا داد: {e2}")
+                raise
         
         conversation_history[chat_id].append({
             "role": "model",
@@ -135,35 +148,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         
     except Exception as e:
-        logger.error(f"❌ خطا: {e}")
-        await update.message.reply_text("❌ یه مشکلی پیش اومد! دوباره امتحان کن.")
+        logger.error(f"❌ خطای کامل: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ خطا: {str(e)[:100]}\n"
+            f"لطفاً دوباره امتحان کن یا /status بزن."
+        )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دستور /status - نمایش وضعیت"""
     user_id = update.effective_user.id
     if AUTHORIZED_USER_ID and user_id != AUTHORIZED_USER_ID:
         await update.message.reply_text("⛔ دسترسی مجاز نیست.")
         return
     
+    # تست اتصال به Gemini
+    gemini_status = "❌"
+    try:
+        test_model = genai.GenerativeModel("gemini-1.5-flash")
+        response = test_model.generate_content("سلام")
+        if response.text:
+            gemini_status = "✅"
+    except:
+        gemini_status = "❌"
+    
     status_text = f"""📊 **وضعیت ربات:**
 
 📁 **فایل JSON:** {'✅ موجود' if json_loaded else '❌ موجود نیست'}
 📝 **تعداد پیام‌ها:** {len(chat_context.split(chr(10))) if chat_context else 0}
-🤖 **حالت فعلی:** {'یادگیری از JSON' if json_loaded else 'حالت عادی (بدون JSON)'}
+🤖 **Gemini API:** {gemini_status}
+📝 **طول پرامپت:** {len(SYSTEM_PROMPT)} کاراکتر
 
 💡 ربات با هر پیام شما بیشتر یاد می‌گیره!
 """
     await update.message.reply_text(status_text)
 
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if AUTHORIZED_USER_ID and user_id != AUTHORIZED_USER_ID:
+        return
+    chat_id = update.effective_chat.id
+    conversation_history[chat_id] = []
+    await update.message.reply_text("🔄 تاریخچه پاک شد!")
+
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # هندلرها
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CommandHandler("status", status))  # ✅ الان درست کار میکنه
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("reset", reset))
     
     logger.info("🚀 ربات هوشمند روشن شد!")
-    logger.info(f"📁 وضعیت JSON: {'✅ بارگذاری شد' if json_loaded else '❌ وجود نداره یا خالی'}")
+    logger.info(f"📁 وضعیت JSON: {'✅' if json_loaded else '❌'}")
     logger.info(f"👤 کاربر مجاز: {AUTHORIZED_USER_ID}")
     
     app.run_polling(allowed_updates=Update.ALL_TYPES)
