@@ -2,9 +2,7 @@ import os
 import json
 import logging
 import asyncio
-import hashlib
-from datetime import datetime, timedelta
-from collections import deque
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 import google.generativeai as genai
@@ -18,10 +16,16 @@ OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 
 # ========== چندین API Key ==========
 API_KEYS = []
-for i in range(1, 6):  # تا ۵ کلید
+for i in range(1, 6):
     key = os.environ.get(f"GEMINI_API_KEY_{i}")
     if key:
         API_KEYS.append(key)
+
+if not API_KEYS:
+    # اگه کلیدهای جدید نبود، از کلید اصلی استفاده کن
+    main_key = os.environ.get("GEMINI_API_KEY")
+    if main_key:
+        API_KEYS.append(main_key)
 
 if not API_KEYS:
     logger.error("❌ هیچ API Key ای تنظیم نشده!")
@@ -31,28 +35,8 @@ if not TELEGRAM_TOKEN or not OWNER_ID:
     logger.error("❌ TELEGRAM_TOKEN یا OWNER_ID تنظیم نشده!")
     exit(1)
 
-# ========== تست کلیدها ==========
-def test_key(key):
-    """تست یک کلید"""
-    try:
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel("gemini-2.0-flash-lite")
-        response = model.generate_content("سلام")
-        return True
-    except Exception as e:
-        logger.warning(f"⚠️ کلید {key[:10]}... کار نمیکنه: {e}")
-        return False
-
-# ========== پیدا کردن کلید کاری ==========
-def get_working_key():
-    """پیدا کردن کلیدی که کار میکنه"""
-    for key in API_KEYS:
-        if test_key(key):
-            return key
-    return None
-
 # ========== مدل ==========
-MODEL_NAME = "gemini-2.0-flash-lite"  # ✅ رایگان‌تر
+MODEL_NAME = "gemini-1.5-flash"  # ✅ مدل مطمئن‌تر
 
 # ========== پرامپت ==========
 SYSTEM_PROMPT = """تو یک دستیار هوشمند هستی که قراره به جای صاحبش صحبت کنی.
@@ -64,6 +48,16 @@ SYSTEM_PROMPT = """تو یک دستیار هوشمند هستی که قراره 
 ۴. اگر چیزی نمی‌دونی، بگو "نمیدونم"
 ۵. هرگز نگو "من یک ربات هستم"
 ۶. پاسخ‌هات کوتاه و مختصر باشه"""
+
+# ========== پیدا کردن کلید کاری (ساده‌شده) ==========
+current_key_index = 0
+
+def get_next_key():
+    """گرفتن کلید بعدی به صورت چرخشی"""
+    global current_key_index
+    key = API_KEYS[current_key_index]
+    current_key_index = (current_key_index + 1) % len(API_KEYS)
+    return key
 
 # ========== محدودیت کاربران ==========
 user_message_count = {}
@@ -103,18 +97,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_name = user.first_name or "کاربر"
     
-    # تست کلیدها
-    working_keys = 0
-    for key in API_KEYS:
-        if test_key(key):
-            working_keys += 1
-    
     await update.message.reply_text(
         f"👋 سلام {user_name}!\n\n"
         f"من دستیار هوشمند هستم.\n"
         f"هر سوالی داری، بپرس! 🤖\n\n"
         f"📊 سهمیه روزانه: {DAILY_LIMIT} پیام\n"
-        f"🔑 کلیدهای کاری: {working_keys}/{len(API_KEYS)}\n"
+        f"🔑 تعداد کلیدها: {len(API_KEYS)}\n"
         f"🔧 مدل: {MODEL_NAME}"
     )
 
@@ -178,16 +166,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         
-        # ========== پیدا کردن کلید کاری ==========
-        working_key = get_working_key()
-        if not working_key:
-            await update.message.reply_text(
-                f"❌ همه کلیدهای API تموم شدن!\n"
-                f"لطفاً به @{os.environ.get('OWNER_USERNAME', 'مالک')} اطلاع بده."
-            )
-            return
+        # ========== استفاده از کلید بعدی ==========
+        key = get_next_key()
+        genai.configure(api_key=key)
         
-        genai.configure(api_key=working_key)
         model = genai.GenerativeModel(
             model_name=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT
@@ -208,11 +190,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"❌ خطا: {e}")
         error_msg = str(e)
         
-        if "quota" in error_msg.lower():
+        if "quota" in error_msg.lower() or "429" in error_msg:
             await update.message.reply_text(
                 f"❌ سهمیه API تموم شده!\n"
-                f"لطفاً بعداً تلاش کن. ⏳\n"
-                f"یا به @{os.environ.get('OWNER_USERNAME', 'مالک')} پیام بده."
+                f"لطفاً بعداً تلاش کن. ⏳"
+            )
+        elif "invalid" in error_msg.lower() or "key" in error_msg.lower():
+            await update.message.reply_text(
+                f"❌ کلید API نامعتبر!\n"
+                f"لطفاً کلیدها رو چک کن."
             )
         else:
             await update.message.reply_text(f"❌ خطا: {error_msg[:100]}")
@@ -235,16 +221,9 @@ async def auto_reply_after_timeout(user_id, context):
             text="⏰ ۵ دقیقه گذشت! خودم پاسخ می‌دم. 🤖"
         )
         
-        # پیدا کردن کلید کاری
-        working_key = get_working_key()
-        if not working_key:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="❌ متاسفانه همه کلیدها تموم شده! بعداً تلاش کن."
-            )
-            return
+        key = get_next_key()
+        genai.configure(api_key=key)
         
-        genai.configure(api_key=working_key)
         model = genai.GenerativeModel(
             model_name=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT
@@ -263,16 +242,10 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ فقط مالک.")
         return
     
-    # تست کلیدها
-    working_keys = 0
-    for key in API_KEYS:
-        if test_key(key):
-            working_keys += 1
-    
     await update.message.reply_text(
         f"📊 **وضعیت ربات:**\n\n"
-        f"🔑 کلیدهای API: {working_keys}/{len(API_KEYS)} کاری\n"
-        f"💾 کش: {len(conversation_history)} مکالمه\n"
+        f"🔑 تعداد کلیدها: {len(API_KEYS)}\n"
+        f"💾 مکالمات: {len(conversation_history)}\n"
         f"👤 کاربران امروز: {len(user_message_count)}\n"
         f"📊 محدودیت روزانه: {DAILY_LIMIT} پیام\n"
         f"🔧 مدل: {MODEL_NAME}"
