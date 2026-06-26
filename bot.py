@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler  # ✅ CommandHandler اضافه شد
 import google.generativeai as genai
 
 # ========== تنظیمات ==========
@@ -47,7 +47,6 @@ if os.path.exists(export_path):
                     messages_list.append(f"{sender}: {text.strip()}")
         
         if messages_list:
-            # گرفتن ۳۰۰ پیام آخر
             recent = messages_list[-300:]
             chat_context = "\n".join(recent)
             json_loaded = True
@@ -63,7 +62,6 @@ else:
 # ========== ساخت پرامپت هوشمند ==========
 def build_prompt():
     if json_loaded and chat_context:
-        # اگر JSON موجود باشه
         return f"""تو دقیقاً مثل صاحب این اکانت تلگرام جواب بده.
 
 تاریخچه چت‌های اخیر این شخص (از فایل JSON):
@@ -78,7 +76,6 @@ def build_prompt():
 ۶. اگه چیزی نمی‌دونی، بگو "نمیدونم"
 """
     else:
-        # اگر JSON نباشه یا خالی باشه
         return """تو یک دستیار هوشمند هستی که قراره به جای صاحبش صحبت کنی.
 
 دستورالعمل‌ها:
@@ -100,7 +97,6 @@ conversation_history = {}
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # فقط کاربر مجاز
     if AUTHORIZED_USER_ID and user_id != AUTHORIZED_USER_ID:
         await update.message.reply_text("⛔ دسترسی مجاز نیست.")
         return
@@ -108,7 +104,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     chat_id = update.effective_chat.id
 
-    # مدیریت تاریخچه مکالمه
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
     
@@ -147,6 +142,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دستور /status - نمایش وضعیت"""
     user_id = update.effective_user.id
     if AUTHORIZED_USER_ID and user_id != AUTHORIZED_USER_ID:
+        await update.message.reply_text("⛔ دسترسی مجاز نیست.")
         return
     
     status_text = f"""📊 **وضعیت ربات:**
@@ -162,8 +158,9 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
+    # هندلرها
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("status", status))  # ✅ الان درست کار میکنه
     
     logger.info("🚀 ربات هوشمند روشن شد!")
     logger.info(f"📁 وضعیت JSON: {'✅ بارگذاری شد' if json_loaded else '❌ وجود نداره یا خالی'}")
