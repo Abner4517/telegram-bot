@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # ✅ درست شد
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 AUTHORIZED_USER_ID = int(os.environ.get("AUTHORIZED_USER_ID", "0"))
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
@@ -21,6 +21,15 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     logger.info("✅ Gemini API تنظیم شد")
+    
+    # لیست مدل‌های موجود
+    try:
+        models = genai.list_models()
+        for model in models:
+            logger.info(f"📌 مدل موجود: {model.name}")
+    except:
+        pass
+        
 except Exception as e:
     logger.error(f"❌ خطا: {e}")
     exit(1)
@@ -37,7 +46,6 @@ if os.path.exists(export_path):
         
         messages_list = []
         
-        # استخراج پیام‌ها
         if "chats" in data:
             for chat in data["chats"].get("list", []):
                 for msg in chat.get("messages", []):
@@ -68,12 +76,11 @@ else:
 # ========== پرامپت ==========
 def build_prompt():
     if json_loaded and chat_context:
-        # کوتاه کردن پرامپت
         context_preview = chat_context[:2000] + "..." if len(chat_context) > 2000 else chat_context
         
         return f"""تو مثل این شخص صحبت کن.
 
-تاریخچه (خلاصه):
+تاریخچه:
 {context_preview}
 
 قوانین:
@@ -119,8 +126,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         
+        # ✅ استفاده از مدل درست
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-pro",  # ✅ تغییر به gemini-pro
             system_instruction=SYSTEM_PROMPT
         )
         
@@ -137,7 +145,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"❌ خطا: {e}")
-        await update.message.reply_text(f"❌ خطا: {str(e)[:100]}")
+        error_msg = str(e)
+        if "404" in error_msg or "not found" in error_msg:
+            await update.message.reply_text("❌ مدل Gemini در دسترس نیست. لطفاً API Key رو چک کن.")
+        else:
+            await update.message.reply_text(f"❌ خطا: {error_msg[:100]}")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -145,11 +157,22 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ دسترسی مجاز نیست.")
         return
     
+    # تست مدل
+    model_status = "❌"
+    try:
+        test_model = genai.GenerativeModel("gemini-pro")
+        response = test_model.generate_content("سلام")
+        if response.text:
+            model_status = "✅"
+    except Exception as e:
+        model_status = f"❌ {str(e)[:30]}"
+    
     status_text = f"""📊 **وضعیت ربات:**
 
 📁 **فایل JSON:** {'✅ موجود' if json_loaded else '❌ موجود نیست'}
 📝 **تعداد پیام‌ها:** {len(chat_context.split(chr(10))) if chat_context else 0}
 🤖 **Gemini API:** {'✅ متصل' if GEMINI_API_KEY else '❌'}
+🔧 **مدل:** gemini-pro {model_status}
 📝 **طول پرامپت:** {len(SYSTEM_PROMPT)} کاراکتر
 
 💡 ربات با هر پیام شما بیشتر یاد می‌گیره!
@@ -174,6 +197,7 @@ def main():
     logger.info("🚀 ربات هوشمند روشن شد!")
     logger.info(f"📁 وضعیت JSON: {'✅' if json_loaded else '❌'}")
     logger.info(f"👤 کاربر مجاز: {AUTHORIZED_USER_ID}")
+    logger.info("🔧 مدل استفاده شده: gemini-pro")
     
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
