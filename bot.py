@@ -10,19 +10,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # ✅ درست شد
 AUTHORIZED_USER_ID = int(os.environ.get("AUTHORIZED_USER_ID", "0"))
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    logger.error("❌ متغیرهای محیطی تنظیم نشده!")
+    logger.error("❌ TELEGRAM_TOKEN یا GEMINI_API_KEY تنظیم نشده!")
     exit(1)
 
-# ========== تنظیم Gemini با خطایابی ==========
+# ========== تنظیم Gemini ==========
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("✅ Gemini تنظیم شد")
+    logger.info("✅ Gemini API تنظیم شد")
 except Exception as e:
-    logger.error(f"❌ خطا در تنظیم Gemini: {e}")
+    logger.error(f"❌ خطا: {e}")
     exit(1)
 
 # ========== بارگذاری فایل JSON ==========
@@ -37,6 +37,7 @@ if os.path.exists(export_path):
         
         messages_list = []
         
+        # استخراج پیام‌ها
         if "chats" in data:
             for chat in data["chats"].get("list", []):
                 for msg in chat.get("messages", []):
@@ -64,10 +65,10 @@ if os.path.exists(export_path):
 else:
     logger.warning("⚠️ فایل JSON پیدا نشد!")
 
-# ========== ساخت پرامپت (کوتاه‌تر) ==========
+# ========== پرامپت ==========
 def build_prompt():
     if json_loaded and chat_context:
-        # اگر JSON خیلی طولانی باشه، کوتاه‌ش میکنیم
+        # کوتاه کردن پرامپت
         context_preview = chat_context[:2000] + "..." if len(chat_context) > 2000 else chat_context
         
         return f"""تو مثل این شخص صحبت کن.
@@ -118,27 +119,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         
-        # تست اتصال به Gemini با یک پیام ساده
-        try:
-            model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
-                system_instruction=SYSTEM_PROMPT
-            )
-            
-            chat = model.start_chat(history=conversation_history[chat_id][:-1])
-            response = chat.send_message(user_text)
-            reply = response.text
-            
-        except Exception as e:
-            logger.error(f"❌ خطای Gemini: {e}")
-            # اگر Gemini خطا داد، با یک پیام ساده تستش کن
-            try:
-                test_model = genai.GenerativeModel("gemini-1.5-flash")
-                test_response = test_model.generate_content("سلام")
-                logger.info(f"✅ Gemini با پیام ساده جواب داد: {test_response.text[:50]}")
-            except Exception as e2:
-                logger.error(f"❌ حتی پیام ساده هم خطا داد: {e2}")
-                raise
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=SYSTEM_PROMPT
+        )
+        
+        chat = model.start_chat(history=conversation_history[chat_id][:-1])
+        response = chat.send_message(user_text)
+        reply = response.text
         
         conversation_history[chat_id].append({
             "role": "model",
@@ -148,11 +136,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         
     except Exception as e:
-        logger.error(f"❌ خطای کامل: {e}", exc_info=True)
-        await update.message.reply_text(
-            f"❌ خطا: {str(e)[:100]}\n"
-            f"لطفاً دوباره امتحان کن یا /status بزن."
-        )
+        logger.error(f"❌ خطا: {e}")
+        await update.message.reply_text(f"❌ خطا: {str(e)[:100]}")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -160,21 +145,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ دسترسی مجاز نیست.")
         return
     
-    # تست اتصال به Gemini
-    gemini_status = "❌"
-    try:
-        test_model = genai.GenerativeModel("gemini-1.5-flash")
-        response = test_model.generate_content("سلام")
-        if response.text:
-            gemini_status = "✅"
-    except:
-        gemini_status = "❌"
-    
     status_text = f"""📊 **وضعیت ربات:**
 
 📁 **فایل JSON:** {'✅ موجود' if json_loaded else '❌ موجود نیست'}
 📝 **تعداد پیام‌ها:** {len(chat_context.split(chr(10))) if chat_context else 0}
-🤖 **Gemini API:** {gemini_status}
+🤖 **Gemini API:** {'✅ متصل' if GEMINI_API_KEY else '❌'}
 📝 **طول پرامپت:** {len(SYSTEM_PROMPT)} کاراکتر
 
 💡 ربات با هر پیام شما بیشتر یاد می‌گیره!
