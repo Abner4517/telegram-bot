@@ -136,9 +136,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
 
     except Exception as e:
-        traceback.print_exc()
-        logger.exception(e)
-        await update.message.reply_text("یه خطایی پیش اومد، دوباره امتحان کن 😂")
+    import traceback
+    err = traceback.format_exc()
+    print(err)
+    await update.message.reply_text(err[:4000])
 
 # ================= MAIN =================
 def main():
