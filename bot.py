@@ -31,10 +31,23 @@ if os.path.exists(export_path):
 else:
     logger.warning("No telegram_export.json found.")
 
-SYSTEM_PROMPT = "تو یک دستیار هوشمند هستی که باید دقیقا مثل صاحب این اکانت تلگرام جواب بدی.\n\nتاریخچه چت های اخیر:\n" + (chat_context if chat_context else "تاریخچه ای یافت نشد.") + "\n\nبر اساس این چت ها سبک نوشتاری و لحن این شخص رو یاد بگیر و عین اون جواب بده. فقط فارسی جواب بده.\n\nمهم: اگه سوالی پرسیده شد که جواب دقیقش رو نمیدونی یا مربوط به اطلاعات شخصی صاحب اکانت هست که نداری، فقط بنویس: UNKNOWN"
+PERSONAL_INFO = """اطلاعات شخصی تو:
+- اسمت حسنه، بهت حصن هم میگن
+- 14 سال و 9 ماهته
+- اصفهان زندگی میکنی
+- کارت سرپرست تایپ توی یه تیم برای مانهواست"""
+
+SYSTEM_PROMPT = (
+    PERSONAL_INFO + "\n\n"
+    "تو یک دستیار هوشمند هستی که باید دقیقا مثل صاحب این اکانت تلگرام جواب بدی.\n\n"
+    "تاریخچه چت های اخیر:\n" + (chat_context if chat_context else "تاریخچه ای یافت نشد.") + "\n\n"
+    "بر اساس این چت ها سبک نوشتاری و لحن این شخص رو یاد بگیر و عین اون جواب بده.\n"
+    "فقط فارسی جواب بده.\n"
+    "مهم: آخر هر پیامت یه ایموجی خنده بذار.\n"
+    "مهم: اگه سوالی پرسیده شد که جواب دقیقش رو نمیدونی یا مربوط به اطلاعات شخصی هست که نداری، فقط بنویس: UNKNOWN"
+)
 
 conversation_history = {}
-pending_questions = {}
 
 def ask_groq(messages):
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -51,7 +64,7 @@ def ask_groq(messages):
     return response.json()["choices"][0]["message"]["content"]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! چطور میتونم کمکت کنم؟")
+    await update.message.reply_text("سلام! چطور میتونم کمکت کنم؟ 😂")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -59,7 +72,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     username = update.effective_user.username or update.effective_user.first_name or "کاربر"
 
-    # Admin is replying to a pending question
     if user_id == ADMIN_USER_ID and user_text.startswith("/reply"):
         parts = user_text.split(" ", 2)
         if len(parts) >= 3:
@@ -82,7 +94,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = ask_groq(messages)
 
         if "UNKNOWN" in reply:
-            # Notify admin
             admin_msg = (
                 "سوالی رسیده که جوابش رو نمیدونم!\n\n"
                 "از: @" + str(username) + " (chat_id: " + str(chat_id) + ")\n"
@@ -91,16 +102,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/reply " + str(chat_id) + " جواب تو اینجا"
             )
             await context.bot.send_message(chat_id=ADMIN_USER_ID, text=admin_msg)
-            await update.message.reply_text("سوال خوبیه! الان چک میکنم و بهت میگم.")
+            await update.message.reply_text("سوال خوبیه! الان چک میکنم و بهت میگم. 😂")
         else:
             conversation_history[chat_id].append({"role": "assistant", "content": reply})
             await update.message.reply_text(reply)
-
-            # If admin is chatting, update context
-            if user_id == ADMIN_USER_ID:
-                chat_context_update = "\nadmin: " + user_text + "\nbot: " + reply
-                global chat_context
-                chat_context += chat_context_update
 
     except Exception as e:
         logger.error("Error: " + str(e))
@@ -111,17 +116,10 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conversation_history[chat_id] = []
     await update.message.reply_text("تاریخچه پاک شد.")
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_USER_ID:
-        return
-    await update.message.reply_text("ربات آنلاینه و داره کار میکنه.")
-
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(CommandHandler("status", status))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("Bot started...")
     app.run_polling()
