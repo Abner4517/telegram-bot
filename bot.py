@@ -5,13 +5,7 @@ import requests
 import traceback
 
 from telegram import Update
-from telegram.ext import (
-    Application,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    CommandHandler
-)
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,7 +14,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# ================= LOAD CHAT HISTORY =================
+# ================= LOAD HISTORY =================
 chat_context = ""
 export_path = "telegram_export.json"
 
@@ -39,34 +33,33 @@ if os.path.exists(export_path):
                 if text:
                     messages_list.append(f"{sender}: {text}")
 
-    recent = messages_list[-200:]
-    chat_context = "\n".join(recent)
+    chat_context = "\n".join(messages_list[-200:])
 else:
-    logger.warning("telegram_export.json not found.")
+    logger.warning("No telegram_export.json found.")
 
 # ================= SYSTEM PROMPT =================
 PERSONAL_INFO = """
-اطلاعات شخصی تو:
+اطلاعات شخصی:
 - اسمت حسنه، بهت حصن هم میگن
 - 14 سال و 9 ماهته
 - اصفهان زندگی میکنی
-- کارت سرپرست تایپ توی یه تیم برای مانهواست
+- سرپرست تایپ مانهوا هستی
 """
 
 SYSTEM_PROMPT = (
-    PERSONAL_INFO + "\n\n"
-    "تو یک دستیار هوشمند هستی که باید مثل صاحب این اکانت جواب بده.\n"
-    "لحن و سبک نوشتار را از تاریخچه یاد بگیر.\n"
+    PERSONAL_INFO
+    + "\n\nتاریخچه چت:\n"
+    + (chat_context if chat_context else "ندارد")
+    + "\n\n"
     "فقط فارسی جواب بده.\n"
-    "آخر هر پیام این ایموجی را اضافه کن: 😂\n\n"
-    "تاریخچه چت:\n" +
-    (chat_context if chat_context else "ندارد")
+    "لحن طبیعی و انسانی داشته باش.\n"
+    "آخر هر پیام 😂 بگذار."
 )
 
 # ================= MEMORY =================
 conversation_history = {}
 
-# ================= GROQ API =================
+# ================= GROQ =================
 def ask_groq(messages):
     url = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -83,7 +76,6 @@ def ask_groq(messages):
 
     response = requests.post(url, headers=headers, json=payload)
 
-    # برای دیباگ
     if response.status_code != 200:
         print("Groq Error:", response.text)
 
@@ -94,18 +86,17 @@ def ask_groq(messages):
 
 # ================= COMMANDS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! چطور میتونم کمکت کنم؟ 😂")
+    await update.message.reply_text("سلام! 😂")
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     conversation_history[chat_id] = []
-    await update.message.reply_text("تاریخچه پاک شد.")
+    await update.message.reply_text("ریست شد.")
 
 # ================= MESSAGE HANDLER =================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_text = update.message.text
-    username = update.effective_user.username or update.effective_user.first_name or "کاربر"
 
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
@@ -115,19 +106,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "content": user_text
     })
 
-    # محدود کردن حافظه
     conversation_history[chat_id] = conversation_history[chat_id][-40:]
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT}
-        ] + conversation_history[chat_id]
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history[chat_id]
 
         reply = ask_groq(messages)
 
-        # همیشه خودش جواب می‌دهد (بدون UNKNOWN و بدون ادمین)
         conversation_history[chat_id].append({
             "role": "assistant",
             "content": reply
@@ -136,10 +123,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
 
     except Exception as e:
-    import traceback
-    err = traceback.format_exc()
-    print(err)
-    await update.message.reply_text(err[:4000])
+        traceback.print_exc()
+        await update.message.reply_text(str(e))
 
 # ================= MAIN =================
 def main():
@@ -149,7 +134,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot started...")
+    print("Bot started...")
     app.run_polling()
 
 if __name__ == "__main__":
