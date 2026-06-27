@@ -1,14 +1,14 @@
 import os
 import logging
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler  # ✅ اینجا اضافه شد
 import google.generativeai as genai
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # فقط یک کلید ساده
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
@@ -31,10 +31,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_text = update.message.text
 
-    if user_id != OWNER_ID:
-        # به غیر از خودت، به بقیه جواب بده
-        pass
-
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
 
@@ -44,7 +40,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash-lite",  # ✅ مدل سبک و رایگان
+            model_name="gemini-2.0-flash-lite",
             system_instruction=SYSTEM_PROMPT
         )
         chat = model.start_chat(history=conversation_history[chat_id][:-1])
@@ -60,7 +56,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", start))  # ✅ الان درسته
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("🚀 ربات روشن شد!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
