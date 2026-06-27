@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
@@ -9,124 +10,119 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
-
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    logger.error("❌ متغیرها تنظیم نشده!")
-    exit(1)
+AUTHORIZED_USER_ID = int(os.environ.get("AUTHORIZED_USER_ID", "0"))
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# ========== لیست مدل‌ها ==========
-MODELS = [
-    "gemini-1.5-flash",
-    "gemini-pro",
-    "gemini-1.0-pro",
-]
+# Load chat history from export file
+chat_context = ""
+export_path = "telegram_export.json"
+if os.path.exists(export_path):
+    with open(export_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    messages_list = []
+    chats = data.get("chats", {}).get("list", [data]) if "chats" in data else [data]
+    
+    for chat in chats:
+        for msg in chat.get("messages", []):
+            if msg.get("type") == "message" and isinstance(msg.get("text"), str):
+                sender = msg.get("from", "نامشخص")
+                text = msg["text"].strip()
+                if text:
+                    messages_list.append(f"{sender}: {text}")
+    
+    recent = messages_list[-300:]
+    chat_context = "\n".join(recent)
+    logger.info(f"Loaded {len(recent)} messages from export.")
+else:
+    logger.warning("No telegram_export.json found. Running without chat history.")
 
-# پیدا کردن مدل موجود
-MODEL_NAME = None
-for model in MODELS:
-    try:
-        test = genai.GenerativeModel(model)
-        test.generate_content("سلام")
-        MODEL_NAME = model
-        logger.info(f"✅ مدل {model} در دسترس است")
-        break
-    except Exception as e:
-        logger.warning(f"⚠️ مدل {model} در دسترس نیست: {e}")
+SYSTEM_PROMPT = f"""تو یک دستیار هوشمند هستی که باید دقیقاً مثل صاحب این اکانت تلگرام جواب بدی.
 
-if not MODEL_NAME:
-    MODEL_NAME = "gemini-1.5-flash"
-    logger.warning(f"⚠️ استفاده از پیش‌فرض: {MODEL_NAME}")
+برای این کار، تاریخچه‌ی چت‌های اخیر این شخص رو داری:
 
-SYSTEM_PROMPT = """تو یک دستیار هستی که به جای صاحبش صحبت می‌کنی.
-پاسخ‌هات کوتاه، خودمونی و فارسی باشه.
-هیچوقت نگو ربات هستم."""
+--- شروع تاریخچه چت ---
+{chat_context if chat_context else "تاریخچه‌ای یافت نشد."}
+--- پایان تاریخچه چت ---
+
+بر اساس این چت‌ها:
+- سبک نوشتاری، لحن، و شیوه پاسخ‌دهی این شخص رو یاد بگیر
+- از همون کلمات، عبارات، و اختصارات که این شخص استفاده می‌کنه استفاده کن
+- طول پیام‌ها رو مشابه حفظ کن
+- اگه این شخص شوخ‌طبعه، شوخ باش. اگه رسمیه، رسمی باش.
+- فقط به فارسی جواب بده مگه اینکه مکالمه به زبان دیگه‌ای باشه
+
+مهم: تو داری به جای این شخص جواب می‌دی، نه به عنوان یه ربات."""
 
 conversation_history = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"👋 سلام! من حسن کوچولو هستم! 😊\n"
-        f"هر سوالی بپرس.\n"
-        f"🔧 مدل: {MODEL_NAME}"
-    )
+    user_id = update.effective_user.id
+    if AUTHORIZED_USER_ID and user_id != AUTHORIZED_USER_ID:
+        await update.message.reply_text("⛔ دسترسی مجاز نیست.")
+        return
+    await update.message.reply_text("✅ ربات آماده‌ست! پیام بفرست.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
+    
+    if AUTHORIZED_USER_ID and user_id != AUTHORIZED_USER_ID:
+        await update.message.reply_text("⛔ دسترسی مجاز نیست.")
+        return
+
     user_text = update.message.text
+    chat_id = update.effective_chat.id
 
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
+    
+    conversation_history[chat_id].append({
+        "role": "user",
+        "parts": [user_text]
+    })
 
-    conversation_history[chat_id].append({"role": "user", "parts": [user_text]})
-    if len(conversation_history[chat_id]) > 30:
-        conversation_history[chat_id] = conversation_history[chat_id][-30:]
+    if len(conversation_history[chat_id]) > 40:
+        conversation_history[chat_id] = conversation_history[chat_id][-40:]
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         
         model = genai.GenerativeModel(
-            model_name=MODEL_NAME,
+            model_name="gemini-1.5-flash",
             system_instruction=SYSTEM_PROMPT
         )
+        
         chat = model.start_chat(history=conversation_history[chat_id][:-1])
         response = chat.send_message(user_text)
         reply = response.text
-
-        conversation_history[chat_id].append({"role": "model", "parts": [reply]})
-        await update.message.reply_text(reply)
-
-    except Exception as e:
-        logger.error(f"❌ خطا: {e}")
-        error_msg = str(e)
         
-        if "quota" in error_msg.lower() or "429" in error_msg:
-            await update.message.reply_text(
-                f"❌ سهمیه مدل {MODEL_NAME} تموم شده!\n"
-                f"لطفاً چند دقیقه صبر کن یا با /switch_model مدل دیگه رو امتحان کن."
-            )
-        else:
-            await update.message.reply_text(f"❌ خطا: {error_msg[:100]}")
+        conversation_history[chat_id].append({
+            "role": "model",
+            "parts": [reply]
+        })
+        
+        await update.message.reply_text(reply)
+        
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await update.message.reply_text("❌ خطایی رخ داد. لطفاً دوباره امتحان کن.")
 
-async def switch_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دستور /switch_model - تغییر مدل"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("⛔ فقط مالک.")
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if AUTHORIZED_USER_ID and user_id != AUTHORIZED_USER_ID:
         return
-    
-    global MODEL_NAME
-    current_index = MODELS.index(MODEL_NAME) if MODEL_NAME in MODELS else 0
-    next_index = (current_index + 1) % len(MODELS)
-    MODEL_NAME = MODELS[next_index]
-    
-    await update.message.reply_text(f"✅ مدل تغییر کرد به: {MODEL_NAME}")
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("⛔ فقط مالک.")
-        return
-    
-    await update.message.reply_text(
-        f"📊 **وضعیت ربات:**\n\n"
-        f"🔧 مدل فعلی: {MODEL_NAME}\n"
-        f"📋 مدل‌های موجود: {', '.join(MODELS)}\n"
-        f"💾 مکالمات: {len(conversation_history)}"
-    )
+    chat_id = update.effective_chat.id
+    conversation_history[chat_id] = []
+    await update.message.reply_text("🔄 تاریخچه مکالمه پاک شد.")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("switch_model", switch_model))
+    app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    logger.info("🚀 ربات روشن شد!")
-    logger.info(f"🔧 مدل: {MODEL_NAME}")
-    
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Bot started...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
